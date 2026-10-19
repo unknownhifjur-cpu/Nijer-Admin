@@ -20,7 +20,7 @@ export function Dashboard() {
   </div>;
 }
 
-const blankProduct = { name: "", nameBn: "", nameBanglish: "", aliases: [], brand: "", tags: [], category: "Fresh Food", price: 0, mrp: 0, discount: 0, image: "https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=900&q=80", unit: "1 piece", rating: 4.5, reviews: 0, stock: 10, badge: "Popular", description: "" };
+const blankProduct = { name: "", nameBn: "", nameBanglish: "", aliases: [], brand: "", tags: [], category: "Fresh Food", price: 0, mrp: 0, discount: 0, image: "https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=900&q=80", unit: "1 piece", stock: 10, badge: "Popular", description: "" };
 
 const listValue = value => Array.isArray(value) ? value.join(", ") : value || "";
 const listFromInput = value => value.split(",").map(item => item.trim()).filter(Boolean);
