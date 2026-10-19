@@ -19,5 +19,10 @@ export const adminApi = {
   confirmPayment: id => request(`/admin/orders/${id}/payment/confirm`, { method: "PATCH" }), rejectPayment: id => request(`/admin/orders/${id}/payment/reject`, { method: "PATCH" }),
   products: () => request("/products"), uploadImage: file => { const body = new FormData(); body.append("image", file); return request("/uploads/image", { method: "POST", body }); },
   createProduct: body => request("/admin/products", { method: "POST", body: JSON.stringify(body) }),
-  updateProduct: (id, body) => request(`/admin/products/${id}`, { method: "PUT", body: JSON.stringify(body) }), deleteProduct: id => request(`/admin/products/${id}`, { method: "DELETE" })
+  updateProduct: (id, body) => request(`/admin/products/${id}`, { method: "PUT", body: JSON.stringify(body) }), deleteProduct: id => request(`/admin/products/${id}`, { method: "DELETE" }),
+  categories: () => request("/admin/categories"),
+  createCategory: body => request("/admin/categories", { method: "POST", body: JSON.stringify(body) }),
+  updateCategory: (id, body) => request(`/admin/categories/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteCategory: id => request(`/admin/categories/${id}`, { method: "DELETE" }),
+  unmappedProducts: () => request("/admin/products/unmapped-categories")
 };

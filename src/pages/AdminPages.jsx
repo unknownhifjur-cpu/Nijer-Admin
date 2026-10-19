@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { AlertTriangle, ArrowUpRight, Edit3, Package, Plus, RefreshCw, Search, ShoppingCart, Trash2, TrendingUp, Users, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, ArrowUpRight, Edit3, FolderTree, Package, Plus, RefreshCw, Search, ShoppingCart, Trash2, TrendingUp, Users, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { adminApi } from "../services/api";
 import { money } from "../utils/format";
@@ -24,21 +24,150 @@ const blankProduct = { name: "", nameBn: "", nameBanglish: "", aliases: [], bran
 
 const listValue = value => Array.isArray(value) ? value.join(", ") : value || "";
 const listFromInput = value => value.split(",").map(item => item.trim()).filter(Boolean);
-const categoryOptionsFromProducts = products => {
- const options = new Map();
- products.forEach(product => { const label = String(product.category || "").normalize("NFKC").trim().replace(/\s+/g, " "); const key = label.toLocaleLowerCase("en"); if (label && !options.has(key)) options.set(key, label); });
- return [...options.values()].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
-};
+function categoryPath(product, categories) {
+ const main = categories.find(category => category._id === product.mainCategoryId);
+ const subcategory = main?.subcategories?.find(item => item._id === product.subcategoryId);
+ return main && subcategory ? `${main.name} / ${subcategory.name}` : product.category || "Needs category mapping";
+}
 
-function ProductModal({ product, onClose, onSaved, categoryOptions }) {
+function ProductModal({ product, onClose, onSaved, categories, onRefreshCategories }) {
   const [form, setForm] = useState(product);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-  const submit = async event => { event.preventDefault(); setError(""); setSaving(true); try { const productData = { ...form, category: form.category.trim().replace(/\s+/g, " ") }; if (product._id) await adminApi.updateProduct(product._id, productData); else await adminApi.createProduct(productData); onSaved(); } catch (saveError) { setError(saveError.message); } finally { setSaving(false); } };
-  return <div className="modal-backdrop"><div className="modal"><div className="modal-head"><h2>{product._id ? "Edit" : "Add"} Product</h2><button onClick={onClose}><X/></button></div><form onSubmit={submit} className="product-form">{["name", "nameBn", "nameBanglish", "brand", "unit", "badge", "description"].map(key => <label key={key}>{key}<input value={form[key] || ""} onChange={event => setForm({ ...form, [key]: event.target.value })}/></label>)}<label>Category<input aria-label="Product category" list="product-category-options" required value={form.category || ""} onChange={event => setForm({ ...form, category: event.target.value })}/><datalist id="product-category-options">{categoryOptions.map(category => <option key={category} value={category}/>)}</datalist></label><label>Aliases<input placeholder="alu, aloo, potato" value={listValue(form.aliases)} onChange={event => setForm({ ...form, aliases: listFromInput(event.target.value) })}/></label><label>Search tags<input placeholder="fresh, vegetable" value={listValue(form.tags)} onChange={event => setForm({ ...form, tags: listFromInput(event.target.value) })}/></label><ImageUploader value={form.image} onChange={image => setForm({ ...form, ...image })}/><div className="two"><label>Price<input type="number" value={form.price} onChange={event => setForm({ ...form, price: Number(event.target.value) })}/></label><label>MRP<input type="number" value={form.mrp} onChange={event => setForm({ ...form, mrp: Number(event.target.value) })}/></label></div><div className="two"><label>Discount<input type="number" value={form.discount} onChange={event => setForm({ ...form, discount: Number(event.target.value) })}/></label><label>Stock<input type="number" value={form.stock} onChange={event => setForm({ ...form, stock: Number(event.target.value) })}/></label></div>{error && <div className="error">{error}</div>}<button className="admin-btn full" disabled={saving}>{saving ? "Saving..." : "Save Product"}</button></form></div></div>;
+  const [newCategoryType, setNewCategoryType] = useState("");
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [creatingCategory, setCreatingCategory] = useState(false);
+  const mainCategories = categories.filter(category => !category.parentId && category.isActive);
+  const selectedMain = mainCategories.find(category => category._id === form.mainCategoryId);
+  const subcategories = selectedMain?.subcategories?.filter(category => category.isActive) || [];
+  const submit = async event => {
+   event.preventDefault(); setError(""); setSaving(true);
+   try {
+    const productData = { ...form, mainCategoryId: form.mainCategoryId, subcategoryId: form.subcategoryId, category: categoryPath({ ...form, category: "" }, categories).split(" / ").pop() };
+    if (product._id) await adminApi.updateProduct(product._id, productData); else await adminApi.createProduct(productData);
+    onSaved();
+   } catch (saveError) { setError(saveError.message); } finally { setSaving(false); }
+  };
+  const createCategory = async event => {
+   event.preventDefault(); setError(""); setCreatingCategory(true);
+   try {
+    const created = await adminApi.createCategory({ name: newCategoryName, parentId: newCategoryType === "subcategory" ? form.mainCategoryId : null });
+    const refreshed = await onRefreshCategories();
+    if (newCategoryType === "subcategory") setForm(current => ({ ...current, subcategoryId: created._id }));
+    else setForm(current => ({ ...current, mainCategoryId: created._id, subcategoryId: "" }));
+    setNewCategoryType(""); setNewCategoryName("");
+    if (!refreshed) throw new Error("Category was created, but the category list could not be refreshed. Please retry.");
+   } catch (categoryError) { setError(categoryError.message); } finally { setCreatingCategory(false); }
+  };
+  return <div className="modal-backdrop"><div className="modal"><div className="modal-head"><h2>{product._id ? "Edit" : "Add"} Product</h2><button type="button" onClick={onClose} aria-label="Close product form"><X/></button></div><form onSubmit={submit} className="product-form">
+   <label>Product name<input required value={form.name || ""} onChange={event => setForm({ ...form, name: event.target.value })}/></label>
+   {["nameBn", "nameBanglish", "brand", "unit", "badge", "description"].map(key => <label key={key}>{key}<input value={form[key] || ""} onChange={event => setForm({ ...form, [key]: event.target.value })}/></label>)}
+   <div className="product-category-fields">
+    <label>Main category<select required value={form.mainCategoryId || ""} onChange={event => setForm({ ...form, mainCategoryId: event.target.value, subcategoryId: "" })}><option value="">Select a main category</option>{mainCategories.map(category => <option key={category._id} value={category._id}>{category.name}</option>)}</select></label>
+    <label>Subcategory<select required disabled={!selectedMain} value={form.subcategoryId || ""} onChange={event => setForm({ ...form, subcategoryId: event.target.value })}><option value="">Select a subcategory</option>{subcategories.map(category => <option key={category._id} value={category._id}>{category.name}</option>)}</select></label>
+    <div className="product-category-actions"><button type="button" className="category-inline-button" onClick={() => { setNewCategoryType("main"); setNewCategoryName(""); setError(""); }}>+ Create New Category</button><button type="button" className="category-inline-button" disabled={!selectedMain} onClick={() => { setNewCategoryType("subcategory"); setNewCategoryName(""); setError(""); }}>+ Create New Subcategory</button></div>
+    {newCategoryType && <div className="category-inline-form"><label>{newCategoryType === "main" ? "New main category name" : `New subcategory under ${selectedMain?.name}`}<input autoFocus required maxLength={80} value={newCategoryName} onChange={event => setNewCategoryName(event.target.value)}/></label><div><button type="button" className="secondary-btn" onClick={() => setNewCategoryType("")}>Cancel</button><button type="button" className="admin-btn" disabled={creatingCategory || !newCategoryName.trim()} onClick={createCategory}>{creatingCategory ? "Creating..." : "Create and select"}</button></div></div>}
+    {product._id && !product.mainCategoryId && <p className="category-mapping-note">Legacy category: {product.category || "not set"}. Choose a main category and subcategory to map this product.</p>}
+   </div>
+   <label>Aliases<input placeholder="alu, aloo, potato" value={listValue(form.aliases)} onChange={event => setForm({ ...form, aliases: listFromInput(event.target.value) })}/></label>
+   <label>Search tags<input placeholder="fresh, vegetable" value={listValue(form.tags)} onChange={event => setForm({ ...form, tags: listFromInput(event.target.value) })}/></label>
+   <ImageUploader value={form.image} onChange={image => setForm({ ...form, ...image })}/>
+   <div className="two"><label>Price<input type="number" min="0" value={form.price} onChange={event => setForm({ ...form, price: Number(event.target.value) })}/></label><label>MRP<input type="number" min="0" value={form.mrp} onChange={event => setForm({ ...form, mrp: Number(event.target.value) })}/></label></div>
+   <div className="two"><label>Discount<input type="number" min="0" value={form.discount} onChange={event => setForm({ ...form, discount: Number(event.target.value) })}/></label><label>Stock<input type="number" min="0" value={form.stock} onChange={event => setForm({ ...form, stock: Number(event.target.value) })}/></label></div>
+   {error && <div className="error" role="alert">{error}</div>}<button className="admin-btn full" disabled={saving}>{saving ? "Saving..." : "Save Product"}</button>
+  </form></div></div>;
 }
 
-export function Products() { const [products, setProducts] = useState([]); const [editing, setEditing] = useState(null); const categoryOptions = categoryOptionsFromProducts(products); const load = () => adminApi.products().then(setProducts).catch(console.error); useEffect(() => { load(); }, []); return <div><div className="admin-top"><div><h1>Products</h1><p>Manage your store inventory.</p></div><button className="admin-btn" onClick={() => setEditing(blankProduct)}><Plus/> Add Product</button></div><div className="admin-panel"><table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Stock</th><th>Action</th></tr></thead><tbody>{products.map(product => <tr key={product._id}><td><div className="table-product"><img src={product.image} alt=""/><span>{product.name}</span></div></td><td>{product.category}</td><td>{money(product.price)}</td><td>{product.stock}</td><td><button className="icon" onClick={() => setEditing(product)}><Edit3/></button><button className="icon danger" onClick={async () => { if (confirm("Delete this product?")) { await adminApi.deleteProduct(product._id); load(); } }}><Trash2/></button></td></tr>)}</tbody></table></div>{editing && <ProductModal product={editing} categoryOptions={categoryOptions} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }}/>}</div>; }
+export function Products() {
+ const [products, setProducts] = useState([]);
+ const [categories, setCategories] = useState([]);
+ const [error, setError] = useState("");
+ const [editing, setEditing] = useState(null);
+ const loadProducts = useCallback(() => adminApi.products().then(setProducts).catch(err => setError(err.message)), []);
+ const loadCategories = useCallback(() => adminApi.categories().then(result => { setCategories(result.categories || []); setError(""); return result.categories || []; }).catch(err => { setError(err.message); return null; }), []);
+ const load = useCallback(() => Promise.all([loadProducts(), loadCategories()]), [loadProducts, loadCategories]);
+ useEffect(() => { load(); }, [load]);
+ return <div><div className="admin-top"><div><h1>Products</h1><p>Manage your store inventory.</p></div><button className="admin-btn" onClick={() => setEditing(blankProduct)}><Plus/> Add Product</button></div>
+  {error && <div className="error" role="alert">{error}</div>}
+  <div className="admin-panel"><table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Stock</th><th>Action</th></tr></thead><tbody>{products.map(product => <tr key={product._id}><td><div className="table-product"><img src={product.image} alt=""/><span>{product.name}</span></div></td><td>{categoryPath(product, categories)}</td><td>{money(product.price)}</td><td>{product.stock}</td><td><button className="icon" onClick={() => setEditing(product)} aria-label={`Edit ${product.name}`}><Edit3/></button><button className="icon danger" onClick={async () => { if (confirm("Delete this product?")) { await adminApi.deleteProduct(product._id); load(); } }} aria-label={`Delete ${product.name}`}><Trash2/></button></td></tr>)}</tbody></table></div>
+  {editing && <ProductModal product={editing} categories={categories} onRefreshCategories={loadCategories} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }}/>}
+ </div>;
+}
+
+function CategoryEditor({ category, parentId, onClose, onSaved }) {
+ const [form, setForm] = useState(category || { name: "", description: "", image: "", displayOrder: 0, isActive: true, showOnHome: !parentId });
+ const [error, setError] = useState("");
+ const [saving, setSaving] = useState(false);
+ const submit = async event => {
+  event.preventDefault(); setError(""); setSaving(true);
+  try {
+   const payload = { ...form, parentId: category ? category.parentId || null : parentId || null };
+   if (category) await adminApi.updateCategory(category._id, payload);
+   else await adminApi.createCategory(payload);
+   await onSaved();
+  } catch (saveError) { setError(saveError.message); } finally { setSaving(false); }
+ };
+ return <div className="modal-backdrop"><div className="modal category-editor-modal"><div className="modal-head"><h2>{category ? "Edit Category" : parentId ? "Add Subcategory" : "Add Main Category"}</h2><button type="button" onClick={onClose} aria-label="Close category form"><X/></button></div>
+  <form className="product-form" onSubmit={submit}>
+   <label>Category name<input required maxLength={80} value={form.name} onChange={event => setForm({ ...form, name: event.target.value })}/></label>
+   <label>Description<textarea maxLength={500} rows={3} value={form.description || ""} onChange={event => setForm({ ...form, description: event.target.value })}/></label>
+   <label>Image URL<input type="url" value={form.image || ""} onChange={event => setForm({ ...form, image: event.target.value })}/></label>
+   <label>Display order<input type="number" min={0} step={1} value={form.displayOrder ?? 0} onChange={event => setForm({ ...form, displayOrder: Number(event.target.value) })}/></label>
+   <label className="category-checkbox"><input type="checkbox" checked={form.isActive !== false} onChange={event => setForm({ ...form, isActive: event.target.checked })}/> Active and visible in Shop</label>
+   {!parentId && <label className="category-checkbox"><input type="checkbox" checked={form.showOnHome !== false} onChange={event => setForm({ ...form, showOnHome: event.target.checked })}/> Show on Home when products are assigned</label>}
+   {error && <div className="error" role="alert">{error}</div>}
+   <button className="admin-btn full" disabled={saving}>{saving ? "Saving..." : "Save Category"}</button>
+  </form>
+ </div></div>;
+}
+
+export function Categories() {
+ const [categories, setCategories] = useState([]);
+ const [loading, setLoading] = useState(true);
+ const [error, setError] = useState("");
+ const [editor, setEditor] = useState(null);
+ const load = useCallback(async () => {
+  try { const result = await adminApi.categories(); setCategories(result.categories || []); setError(""); }
+  catch (loadError) { setError(loadError.message); }
+  finally { setLoading(false); }
+ }, []);
+ useEffect(() => {
+  let cancelled = false;
+  const fetchInitialCategories = async () => {
+   try {
+    const result = await adminApi.categories();
+    if (!cancelled) { setCategories(result.categories || []); setError(""); }
+   } catch (loadError) {
+    if (!cancelled) setError(loadError.message);
+   } finally {
+    if (!cancelled) setLoading(false);
+   }
+  };
+  void fetchInitialCategories();
+  return () => { cancelled = true; };
+ }, []);
+ const save = async () => { await load(); setEditor(null); };
+ const toggle = async category => {
+  try { await adminApi.updateCategory(category._id, { isActive: category.isActive === false }); await load(); }
+  catch (updateError) { setError(updateError.message); }
+ };
+ const remove = async category => {
+  if (!confirm(`Delete "${category.name}"? Categories with subcategories or products must be reassigned first.`)) return;
+  try { await adminApi.deleteCategory(category._id); await load(); }
+  catch (deleteError) { setError(deleteError.message); }
+ };
+ return <div><div className="admin-top"><div><h1>Categories</h1><p>Organize products into main categories and subcategories.</p></div><button type="button" className="admin-btn" onClick={() => setEditor({ parentId: null })}><Plus/> Add Main Category</button></div>
+  {error && <div className="error" role="alert">{error}<button type="button" className="category-inline-button" onClick={load}>Retry</button></div>}
+  {loading ? <div className="empty-admin">Loading categories…</div> : !categories.length ? <div className="empty-admin">No categories yet. Add a main category to get started.</div> :
+   <div className="category-manager-list">{categories.map(main => <section className="admin-panel category-manager-main" key={main._id}>
+    <header className="category-manager-heading"><div className="category-manager-icon"><FolderTree size={20}/></div><div className="category-manager-name"><h2>{main.name}</h2><span>{main.productCount || 0} products · {main.isActive === false ? "Inactive" : "Active"}{main.showOnHome ? " · Home" : ""}</span></div><div className="category-manager-actions"><button type="button" className="icon" onClick={() => setEditor(main)} aria-label={`Edit ${main.name}`}><Edit3/></button><button type="button" className="icon" onClick={() => toggle(main)}>{main.isActive === false ? "Activate" : "Deactivate"}</button><button type="button" className="icon danger" onClick={() => remove(main)} aria-label={`Delete ${main.name}`}><Trash2/></button></div></header>
+    <div className="category-manager-children">{(main.subcategories || []).map(subcategory => <div className="category-manager-child" key={subcategory._id}><div><strong>{subcategory.name}</strong><small>{subcategory.productCount || 0} products · {subcategory.isActive === false ? "Inactive" : "Active"}</small></div><div><button type="button" className="icon" onClick={() => setEditor(subcategory)} aria-label={`Edit ${subcategory.name}`}><Edit3/></button><button type="button" className="icon" onClick={() => toggle(subcategory)}>{subcategory.isActive === false ? "Activate" : "Deactivate"}</button><button type="button" className="icon danger" onClick={() => remove(subcategory)} aria-label={`Delete ${subcategory.name}`}><Trash2/></button></div></div>)}
+     <button type="button" className="category-inline-button" onClick={() => setEditor({ parentId: main._id })}><Plus size={15}/> Add subcategory</button>
+    </div>
+   </section>)}</div>}
+  {editor && <CategoryEditor category={editor._id ? editor : null} parentId={editor.parentId} onClose={() => setEditor(null)} onSaved={save}/>}
+ </div>;
+}
 
 export function Orders() {
   const [orders, setOrders] = useState([]);
