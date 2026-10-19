@@ -2,6 +2,10 @@
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
+## Order management
+
+The Orders page verifies manual UPI payments and advances eligible orders through confirmation, picking, sorting, packing, delivery, and completion. The API enforces each transition; UPI orders cannot be confirmed for fulfillment until payment is verified.
+
 Currently, two official plugins are available:
 
 - [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)

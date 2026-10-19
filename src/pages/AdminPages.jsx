@@ -173,11 +173,36 @@ export function Orders() {
   const [orders, setOrders] = useState([]);
   const [error, setError] = useState("");
   const [verifying, setVerifying] = useState("");
+  const [updating, setUpdating] = useState("");
   const load = () => adminApi.orders().then(setOrders).catch(err => setError(err.message));
   useEffect(() => { load(); }, []);
-  const statuses = ["Placed", "Packed", "Out for Delivery", "Delivered", "Cancelled"];
+  const transitions = {
+    Placed: ["Confirmed", "Cancelled"],
+    Confirmed: ["Picking", "Cancelled"],
+    Picking: ["Sorting", "Cancelled"],
+    Sorting: ["Packing", "Cancelled"],
+    Packing: ["Packed", "Cancelled"],
+    Packed: ["Out for Delivery", "Cancelled"],
+    "Out for Delivery": ["Delivered", "Failed Delivery"]
+  };
+  const updateStatus = async (order, status) => {
+    if (status === "Cancelled" && !window.confirm(`Cancel order #${order.orderNumber || String(order._id).slice(-8)}?`)) return;
+    setError("");
+    setUpdating(order._id);
+    try {
+      await adminApi.updateOrder(order._id, status);
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUpdating("");
+    }
+  };
   const verify = async (id, action) => {
-    if (action === "reject" && !confirm("Reject this payment? The customer will be asked to contact the shop.")) return;
+    const confirmation = action === "confirm"
+      ? "Confirm that this UPI payment has been received?"
+      : "Reject this payment? The customer will be asked to contact the shop.";
+    if (!window.confirm(confirmation)) return;
     setError("");
     setVerifying(`${action}:${id}`);
     try {
@@ -189,7 +214,65 @@ export function Orders() {
       setVerifying("");
     }
   };
-  return <div><div className="admin-top"><div><h1>Orders</h1><p>Update order fulfillment and verify manual UPI payments.</p></div><button className="icon-action" title="Refresh orders" onClick={load}><RefreshCw/></button></div>{error && <div className="error">{error}</div>}<div className="admin-panel"><table><thead><tr><th>Order</th><th>Customer</th><th>Delivery location</th><th>Payment</th><th>UTR</th><th>Order status</th><th>Date</th></tr></thead><tbody>{orders.map(order => { const paymentStatus = order.paymentStatus || (order.paymentMethod === "UPI" ? "payment_submitted" : "unpaid"); const paymentLabel = paymentStatus === "payment_submitted" ? "Payment Verification Pending" : paymentStatus === "paid" ? "Payment received" : paymentStatus === "payment_rejected" ? "Payment rejected" : "Unpaid"; const location = order.deliveryAddress; const hasCoordinates = Number.isFinite(location?.latitude) && Number.isFinite(location?.longitude) && location.latitude >= -90 && location.latitude <= 90 && location.longitude >= -180 && location.longitude <= 180; const mapUrl = hasCoordinates ? `https://www.openstreetmap.org/?mlat=${location.latitude}&mlon=${location.longitude}#map=16/${location.latitude}/${location.longitude}` : ""; return <tr key={order._id}><td>#{String(order._id).slice(-8)}<small>{order.items?.length || 0} items · {money(order.total)}</small></td><td><b>{order.customerName}</b><br/><small>{order.phone || order.customerEmail}</small></td><td>{hasCoordinates ? <div className="admin-order-location"><small>{location.latitude.toFixed(6)}, {location.longitude.toFixed(6)}</small><a href={mapUrl} target="_blank" rel="noopener noreferrer">Open in OpenStreetMap</a></div> : <span className="admin-order-no-location">No map point selected</span>}</td><td><strong>{order.paymentMethod || "COD"}</strong><small className={`admin-payment-status payment-${paymentStatus}`}>{paymentLabel}</small>{paymentStatus === "payment_submitted" && <div className="payment-actions"><button className="admin-btn" disabled={Boolean(verifying)} onClick={() => verify(order._id, "confirm")}>{verifying === `confirm:${order._id}` ? "Confirming..." : "Confirm Payment Received"}</button><button className="icon danger" disabled={Boolean(verifying)} onClick={() => verify(order._id, "reject")}>{verifying === `reject:${order._id}` ? "Rejecting..." : "Reject Payment"}</button></div>}</td><td>{order.utr || "-"}</td><td><select value={order.status || "Placed"} onChange={async event => { try { await adminApi.updateOrder(order._id, event.target.value); } catch (err) { setError(err.message); } load(); }}>{statuses.map(status => <option key={status}>{status}</option>)}</select></td><td>{order.createdAt ? new Date(order.createdAt).toLocaleString() : "-"}</td></tr>; })}</tbody></table>{!orders.length && <div className="empty-admin">No orders yet.</div>}</div></div>;
+  return (
+    <div>
+      <div className="admin-top">
+        <div><h1>Orders</h1><p>Track fulfillment and verify UPI payments.</p></div>
+        <button className="icon-action" title="Refresh orders" onClick={load}><RefreshCw /></button>
+      </div>
+      {error && <div className="error" role="alert">{error}</div>}
+      <div className="admin-panel">
+        <table>
+          <thead><tr><th>Order</th><th>Customer</th><th>Delivery</th><th>Payment</th><th>UTR</th><th>Status</th><th>Date</th></tr></thead>
+          <tbody>{orders.map(order => {
+            const paymentStatus = order.paymentStatus || (order.paymentMethod === "UPI" ? "payment_submitted" : "unpaid");
+            const paymentLabel = paymentStatus === "payment_submitted" ? "Awaiting verification" : paymentStatus === "paid" ? "Received" : paymentStatus === "payment_rejected" ? "Rejected" : "Due on delivery";
+            const location = order.deliveryAddress;
+            const hasCoordinates = Number.isFinite(location?.latitude) && Number.isFinite(location?.longitude) && location.latitude >= -90 && location.latitude <= 90 && location.longitude >= -180 && location.longitude <= 180;
+            const mapUrl = hasCoordinates ? `https://www.openstreetmap.org/?mlat=${location.latitude}&mlon=${location.longitude}#map=16/${location.latitude}/${location.longitude}` : "";
+            const nextStatuses = transitions[order.status || "Placed"] || [];
+            const availableStatuses = nextStatuses.filter(status =>
+              (status !== "Confirmed" || order.paymentMethod !== "UPI" || paymentStatus === "paid") &&
+              (status !== "Cancelled" || order.paymentMethod !== "UPI" || paymentStatus !== "paid")
+            );
+            return (
+              <tr key={order._id}>
+                <td><b>{order.orderNumber || `#${String(order._id).slice(-8)}`}</b><small>{order.items?.map(item => `${item.name} × ${item.quantity}`).join(", ") || "No items"} · {money(order.total)}</small></td>
+                <td><b>{order.customerName || "Customer"}</b><br /><small>{order.phone || order.customerEmail || "No contact details"}</small></td>
+                <td>
+                  <small>{[location?.locality, location?.village, location?.postOffice, location?.district].filter(Boolean).join(", ") || order.address || "No address"}</small>
+                  {hasCoordinates && <div className="admin-order-location"><a href={mapUrl} target="_blank" rel="noopener noreferrer">Open map</a></div>}
+                </td>
+                <td><strong>{order.paymentMethod || "COD"}</strong><small className={`admin-payment-status payment-${paymentStatus}`}>{paymentLabel}</small>
+                  {paymentStatus === "payment_submitted" && <div className="payment-actions">
+                    <button className="admin-btn" disabled={Boolean(verifying)} onClick={() => verify(order._id, "confirm")}>{verifying === `confirm:${order._id}` ? "Confirming…" : "Confirm received"}</button>
+                    <button className="icon danger" disabled={Boolean(verifying)} onClick={() => verify(order._id, "reject")}>{verifying === `reject:${order._id}` ? "Rejecting…" : "Reject payment"}</button>
+                  </div>}
+                </td>
+                <td>{order.utr || "—"}</td>
+                <td>
+                  <strong>{order.status || "Placed"}</strong>
+                  {availableStatuses.length > 0 && (
+                    <select
+                      aria-label={`Update order ${order.orderNumber || String(order._id).slice(-8)}`}
+                      value=""
+                      disabled={Boolean(updating)}
+                      onChange={event => updateStatus(order, event.target.value)}
+                    >
+                      <option value="" disabled>{updating === order._id ? "Updating…" : "Next action"}</option>
+                      {availableStatuses.map(status => <option key={status} value={status}>{status}</option>)}
+                    </select>
+                  )}
+                </td>
+                <td>{order.createdAt ? new Date(order.createdAt).toLocaleString() : "—"}</td>
+              </tr>
+            );
+          })}</tbody>
+        </table>
+        {!orders.length && <div className="empty-admin">No orders yet.</div>}
+      </div>
+    </div>
+  );
 }
 
 export function Customers() { const [customers, setCustomers] = useState([]); const [query, setQuery] = useState(""); const load = () => adminApi.customers().then(setCustomers).catch(console.error); useEffect(() => { load(); }, []); const filtered = customers.filter(customer => [customer.name, customer.email].some(value => String(value || "").toLowerCase().includes(query.toLowerCase()))); return <div className="customers-page"><div className="admin-top"><div><div className="eyebrow">Relationship desk</div><h1>Customers</h1><p>Understand who shops with you and how often they return.</p></div><button className="icon-action" title="Refresh customers" onClick={load}><RefreshCw/></button></div><div className="admin-panel customer-directory"><div className="directory-toolbar"><div className="directory-title"><h2>Customer directory</h2><span>{filtered.length} visible</span></div><label className="admin-search"><Search size={17}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search name or email"/></label></div><table className="customer-table"><thead><tr><th>Customer</th><th>Joined</th><th>Orders</th><th>Total spent</th><th>Last order</th></tr></thead><tbody>{filtered.map(customer => <tr key={customer._id}><td><b>{customer.name}</b><small>{customer.email}</small></td><td>{customer.createdAt ? new Date(customer.createdAt).toLocaleDateString() : "-"}</td><td>{customer.orders}</td><td>{money(customer.spent)}</td><td>{customer.lastOrderAt ? new Date(customer.lastOrderAt).toLocaleDateString() : "No orders yet"}</td></tr>)}</tbody></table></div></div>; }
